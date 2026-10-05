@@ -1,0 +1,31 @@
+{
+  "name": "real-time-collaborative-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "tests"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test:core --workspace=tests",
+    "test:core": "npm run test:core --workspace=tests",
+    "dev:server": "npm run dev --workspace=packages/server",
+    "dev:web": "npm run dev --workspace=packages/web",
+    "db:generate": "npm run db:generate --workspace=packages/server",
+    "db:push": "npm run db:push --workspace=packages/server",
+    "test:unit": "npm run test:unit --workspace=tests",
+    "test:convergence": "npm run test:convergence --workspace=tests",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "jsonwebtoken": "^9.0.3"
+  }
+}

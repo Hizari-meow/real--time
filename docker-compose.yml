@@ -1,0 +1,166 @@
+name: collab-workspace
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: collab_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: collab_user
+      POSTGRES_PASSWORD: collab_secret
+      POSTGRES_DB: collab_db
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U collab_user -d collab_db"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+    networks:
+      - collab_net
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: collab_redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+    networks:
+      - collab_net
+
+  minio:
+    image: elestio/minio:latest
+    container_name: collab_minio
+    restart: unless-stopped
+    command: minio server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadminpassword
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+    networks:
+      - collab_net
+
+  minio-init:
+    image: elestio/minio:latest
+    container_name: collab_minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./docker/minio/create-buckets.sh:/create-buckets.sh:ro
+    entrypoint: ["/bin/sh", "/create-buckets.sh"]
+    networks:
+      - collab_net
+
+  ws-node-1:
+    build:
+      context: .
+      dockerfile: packages/server/Dockerfile
+    container_name: ws-node-1
+    restart: unless-stopped
+    environment:
+      NODE_ID: node_1
+      PORT: 4001
+      DATABASE_URL: postgresql://collab_user:collab_secret@postgres:5432/collab_db?schema=public
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadminpassword
+      MINIO_BUCKET: document-snapshots
+      MINIO_USE_SSL: "false"
+      CORS_ORIGIN: http://localhost:3005,http://127.0.0.1:3005,http://localhost:3000,http://127.0.0.1:3000
+      ALLOWED_ORIGINS: http://localhost:3005,http://127.0.0.1:3005,http://localhost:3000,http://127.0.0.1:3000
+      COOKIE_SECURE: "false"
+      JWT_SECRET: collab_jwt_super_secret_key_2026_phase0
+      JWT_REFRESH_SECRET: collab_jwt_refresh_secret_key_2026_phase0
+    ports:
+      - "4001:4001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - collab_net
+
+  ws-node-2:
+    build:
+      context: .
+      dockerfile: packages/server/Dockerfile
+    container_name: ws-node-2
+    restart: unless-stopped
+    environment:
+      NODE_ID: node_2
+      PORT: 4002
+      DATABASE_URL: postgresql://collab_user:collab_secret@postgres:5432/collab_db?schema=public
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadminpassword
+      MINIO_BUCKET: document-snapshots
+      MINIO_USE_SSL: "false"
+      CORS_ORIGIN: http://localhost:3005,http://127.0.0.1:3005,http://localhost:3000,http://127.0.0.1:3000
+      ALLOWED_ORIGINS: http://localhost:3005,http://127.0.0.1:3005,http://localhost:3000,http://127.0.0.1:3000
+      COOKIE_SECURE: "false"
+      JWT_SECRET: collab_jwt_super_secret_key_2026_phase0
+      JWT_REFRESH_SECRET: collab_jwt_refresh_secret_key_2026_phase0
+    ports:
+      - "4002:4002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - collab_net
+
+  nginx:
+    build:
+      context: ./docker/nginx
+      dockerfile: Dockerfile
+    container_name: collab_nginx
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - ws-node-1
+      - ws-node-2
+    networks:
+      - collab_net
+
+networks:
+  collab_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
