@@ -1,9 +1,11 @@
 import { getPrismaClient } from '../../storage/db.js';
 import { ProjectService } from './ProjectService.js';
 import { TaskSocketManager } from './TaskSocketManager.js';
-import { MentionService } from '../mention/MentionService.js';
-import { NotificationService } from '../notification/NotificationService.js';
 import { publishDomainEvent } from '../events/event-system.js';
+import { formatTask } from './task-formatter.js';
+import { TaskDependencyService } from './TaskDependencyService.js';
+import { TaskCommentService } from './TaskCommentService.js';
+import { TaskTimeService } from './TaskTimeService.js';
 
 export interface AssigneeDTO {
   userId: string;
@@ -50,6 +52,8 @@ export interface UpdateTaskDTO {
   position?: number;
 }
 
+export { formatTask, TaskDependencyService, TaskCommentService, TaskTimeService };
+
 export class TaskService {
   private static instance: TaskService | null = null;
   private prisma = getPrismaClient();
@@ -64,61 +68,8 @@ export class TaskService {
   /**
    * Helper to format task for API responses
    */
-  private formatTask(task: any) {
-    const subtasks = task.subtasks || [];
-    const totalSubtasks = subtasks.length;
-    const completedSubtasks = subtasks.filter((s: any) => s.column === 'done').length;
-    const subtaskProgress =
-      totalSubtasks > 0 ? Math.round((completedSubtasks / totalSubtasks) * 100) : 0;
-
-    let checklist: any[] = [];
-    try {
-      checklist = JSON.parse(task.checklistJson || '[]');
-    } catch {
-      checklist = [];
-    }
-
-    return {
-      id: task.id,
-      orgId: task.orgId,
-      projectId: task.projectId || undefined,
-      sprintId: task.sprintId || undefined,
-      parentTaskId: task.parentTaskId || undefined,
-      title: task.title,
-      description: task.description,
-      column: task.column,
-      priority: task.priority,
-      storyPoints: task.storyPoints ?? 0,
-      estimatedMinutes: task.estimatedMinutes ?? 0,
-      position: task.position ?? 0,
-      assigneeId: task.assigneeId || undefined,
-      assigneeName: task.assigneeName || undefined,
-      dueDate: task.dueDate?.toISOString().slice(0, 10),
-      completedAt: task.completedAt?.toISOString(),
-      sourceMessageId: task.sourceMessageId || undefined,
-      labels: task.labels || [],
-      checklist,
-      assignees: (task.assignees || []).map((a: any) => ({
-        id: a.id,
-        userId: a.userId,
-        name: a.name,
-        email: a.email,
-        avatarColor: a.avatarColor,
-      })),
-      dependencies: (task.dependencies || []).map((d: any) => ({
-        id: d.id,
-        dependsOnId: d.dependsOnId,
-        type: d.type,
-        dependsOnTitle: d.dependsOn?.title,
-        dependsOnColumn: d.dependsOn?.column,
-      })),
-      subtaskCount: totalSubtasks,
-      completedSubtasks,
-      subtaskProgress,
-      commentsCount: task.comments?.length || 0,
-      createdAt: task.createdAt.toISOString(),
-      updatedAt: task.updatedAt.toISOString(),
-    };
+  public formatTask(task: any) {
+    return formatTask(task);
   }
 
   /**
@@ -163,7 +114,7 @@ export class TaskService {
       orderBy: [{ position: 'asc' }, { createdAt: 'desc' }],
     });
 
-    return tasks.map((t) => this.formatTask(t));
+    return tasks.map((t) => formatTask(t));
   }
 
   /**
@@ -211,7 +162,7 @@ export class TaskService {
       throw new Error('WORKSPACE_ISOLATION_ERROR');
     }
 
-    const formatted = this.formatTask(taskAnywhere);
+    const formatted = formatTask(taskAnywhere);
     return {
       ...formatted,
       comments: taskAnywhere.comments.map((c) => ({
@@ -367,7 +318,7 @@ export class TaskService {
       orgId,
       projectId: newTask.projectId || undefined,
       taskId: newTask.id,
-      data: this.formatTask(newTask),
+      data: formatTask(newTask),
       timestamp: new Date().toISOString(),
     });
 
@@ -576,7 +527,7 @@ export class TaskService {
   }
 
   /**
-   * Add Task Dependency with Graph Cycle Detection
+   * Add Task Dependency (delegated to TaskDependencyService)
    */
   public async addDependency(
     orgId: string,
@@ -585,129 +536,18 @@ export class TaskService {
     dependsOnId: string,
     type: string = 'finish_to_start'
   ) {
-    // 1. Cannot depend on self
-    if (taskId === dependsOnId) {
-      throw new Error('DEPENDENCY_SELF_REFERENCE');
-    }
-
-    // 2. Both tasks must exist and belong to the same org
-    const [task, target] = await Promise.all([
-      this.prisma.task.findUnique({ where: { id: taskId } }),
-      this.prisma.task.findUnique({ where: { id: dependsOnId } }),
-    ]);
-
-    if (!task || task.orgId !== orgId || !target || target.orgId !== orgId) {
-      throw new Error('TASK_NOT_FOUND');
-    }
-
-    // 3. CYCLE DETECTION ALGORITHM:
-    // Check if there is already a path from dependsOnId to taskId
-    const hasCycle = await this.checkDependencyCycle(orgId, taskId, dependsOnId);
-    if (hasCycle) {
-      throw new Error('DEPENDENCY_CYCLE_DETECTED');
-    }
-
-    // 4. Create dependency
-    const dependency = await this.prisma.taskDependency.upsert({
-      where: { taskId_dependsOnId: { taskId, dependsOnId } },
-      create: { taskId, dependsOnId, type },
-      update: { type },
-      include: { dependsOn: { select: { id: true, title: true, column: true } } },
-    });
-
-    // Record activity
-    await this.prisma.taskActivity.create({
-      data: {
-        orgId,
-        taskId,
-        actorId: actor.userId,
-        actorName: actor.name,
-        action: 'dependency_added',
-        details: `Thêm phụ thuộc vào công việc "${target.title}"`,
-      },
-    });
-
-    TaskSocketManager.getInstance().broadcastToOrg(orgId, {
-      type: 'dependency:added',
-      orgId,
-      taskId,
-      data: dependency,
-      timestamp: new Date().toISOString(),
-    });
-
-    return dependency;
+    return TaskDependencyService.getInstance().addDependency(orgId, actor, taskId, dependsOnId, type);
   }
 
   /**
-   * Remove dependency
+   * Remove dependency (delegated to TaskDependencyService)
    */
   public async removeDependency(orgId: string, taskId: string, dependsOnId: string) {
-    await this.prisma.taskDependency.deleteMany({
-      where: { taskId, dependsOnId },
-    });
-
-    TaskSocketManager.getInstance().broadcastToOrg(orgId, {
-      type: 'dependency:removed',
-      orgId,
-      taskId,
-      data: { taskId, dependsOnId },
-      timestamp: new Date().toISOString(),
-    });
-
-    return { success: true };
+    return TaskDependencyService.getInstance().removeDependency(orgId, taskId, dependsOnId);
   }
 
   /**
-   * Check if adding (taskId -> dependsOnId) introduces a cycle.
-   * BFS search: Does dependsOnId already have a dependency path reaching taskId?
-   */
-  private async checkDependencyCycle(orgId: string, taskId: string, dependsOnId: string): Promise<boolean> {
-    // Fetch all dependencies in the org
-    const allDependencies = await this.prisma.taskDependency.findMany({
-      where: {
-        task: { orgId },
-      },
-      select: {
-        taskId: true,
-        dependsOnId: true,
-      },
-    });
-
-    // Build adjacency list: node -> outgoing edges (what node depends on)
-    const adjList = new Map<string, string[]>();
-    for (const d of allDependencies) {
-      if (!adjList.has(d.taskId)) {
-        adjList.set(d.taskId, []);
-      }
-      adjList.get(d.taskId)!.push(d.dependsOnId);
-    }
-
-    // Breadth-First Search starting from dependsOnId
-    const visited = new Set<string>();
-    const queue = [dependsOnId];
-
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      if (current === taskId) {
-        return true; // Cycle detected!
-      }
-
-      if (!visited.has(current)) {
-        visited.add(current);
-        const neighbors = adjList.get(current) || [];
-        for (const neighbor of neighbors) {
-          if (!visited.has(neighbor)) {
-            queue.push(neighbor);
-          }
-        }
-      }
-    }
-
-    return false;
-  }
-
-  /**
-   * Add comment to task and trigger @mention notifications
+   * Add comment to task (delegated to TaskCommentService)
    */
   public async addComment(
     orgId: string,
@@ -715,87 +555,11 @@ export class TaskService {
     taskId: string,
     content: string
   ) {
-    if (!content || !content.trim()) {
-      throw new Error('COMMENT_CONTENT_REQUIRED');
-    }
-
-    const task = await this.prisma.task.findUnique({
-      where: { id: taskId },
-    });
-
-    if (!task || task.orgId !== orgId) {
-      throw new Error('TASK_NOT_FOUND');
-    }
-
-    const comment = await this.prisma.taskComment.create({
-      data: {
-        taskId,
-        orgId,
-        authorId: author.userId,
-        authorName: author.name,
-        authorColor: author.color || '#3b82f6',
-        content: content.trim(),
-      },
-    });
-
-    // Record activity
-    await this.prisma.taskActivity.create({
-      data: {
-        orgId,
-        taskId,
-        actorId: author.userId,
-        actorName: author.name,
-        action: 'comment_added',
-        details: `${author.name} đã thêm bình luận`,
-      },
-    });
-
-    // Extract @mentions and deliver notifications via Phase 1 NotificationService
-    const tokens = MentionService.getInstance().extractMentionTokens(content);
-    if (tokens.length > 0) {
-      const resolvedUsers = await MentionService.getInstance().resolveMentionedUsers(
-        orgId,
-        tokens,
-        author.userId
-      );
-
-      for (const u of resolvedUsers) {
-        await NotificationService.getInstance().createNotification({
-          orgId,
-          userId: u.userId,
-          actorId: author.userId,
-          type: 'mention',
-          title: `${author.name} đã nhắc đến bạn trong công việc`,
-          body: `"${content.slice(0, 100)}${content.length > 100 ? '...' : ''}"`,
-          senderName: author.name,
-          senderColor: author.color || '#3b82f6',
-          targetUrl: `/tasks?taskId=${taskId}`,
-          targetLabel: task.title,
-          isPriority: true,
-        });
-      }
-    }
-
-    TaskSocketManager.getInstance().broadcastToOrg(orgId, {
-      type: 'comment:added',
-      orgId,
-      taskId,
-      data: {
-        id: comment.id,
-        taskId: comment.taskId,
-        authorId: comment.authorId,
-        authorName: comment.authorName,
-        content: comment.content,
-        createdAt: comment.createdAt.toISOString(),
-      },
-      timestamp: new Date().toISOString(),
-    });
-
-    return comment;
+    return TaskCommentService.getInstance().addComment(orgId, author, taskId, content);
   }
 
   /**
-   * Add work log (time tracking)
+   * Add work log (delegated to TaskTimeService)
    */
   public async addTimeLog(
     orgId: string,
@@ -803,87 +567,13 @@ export class TaskService {
     taskId: string,
     data: { durationSeconds: number; note?: string; startTime?: string | Date; endTime?: string | Date }
   ) {
-    if (!data.durationSeconds || data.durationSeconds <= 0) {
-      throw new Error('INVALID_DURATION');
-    }
-
-    const task = await this.prisma.task.findUnique({
-      where: { id: taskId },
-    });
-
-    if (!task || task.orgId !== orgId) {
-      throw new Error('TASK_NOT_FOUND');
-    }
-
-    const timeLog = await this.prisma.taskTimeLog.create({
-      data: {
-        taskId,
-        orgId,
-        userId: user.userId,
-        userName: user.name,
-        durationSeconds: data.durationSeconds,
-        note: data.note?.trim() || '',
-        startTime: data.startTime ? new Date(data.startTime) : new Date(),
-        endTime: data.endTime ? new Date(data.endTime) : null,
-      },
-    });
-
-    // Record activity
-    const durationMinutes = Math.round(data.durationSeconds / 60);
-    await this.prisma.taskActivity.create({
-      data: {
-        orgId,
-        taskId,
-        actorId: user.userId,
-        actorName: user.name,
-        action: 'time_logged',
-        details: `${user.name} ghi nhận ${durationMinutes} phút làm việc${data.note ? `: ${data.note}` : ''}`,
-      },
-    });
-
-    TaskSocketManager.getInstance().broadcastToOrg(orgId, {
-      type: 'timelog:added',
-      orgId,
-      taskId,
-      data: timeLog,
-      timestamp: new Date().toISOString(),
-    });
-
-    return timeLog;
+    return TaskTimeService.getInstance().addTimeLog(orgId, user, taskId, data);
   }
 
   /**
-   * List time logs for a task
+   * List time logs for a task (delegated to TaskTimeService)
    */
   public async listTimeLogs(orgId: string, taskId: string) {
-    const task = await this.prisma.task.findUnique({ where: { id: taskId } });
-    if (!task || task.orgId !== orgId) {
-      throw new Error('TASK_NOT_FOUND');
-    }
-
-    const logs = await this.prisma.taskTimeLog.findMany({
-      where: { taskId },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    const totalSeconds = logs.reduce((sum, l) => sum + l.durationSeconds, 0);
-    const totalHours = Math.round((totalSeconds / 3600) * 10) / 10;
-
-    return {
-      taskId,
-      totalSeconds,
-      totalHours,
-      logs: logs.map((l) => ({
-        id: l.id,
-        userId: l.userId,
-        userName: l.userName,
-        durationSeconds: l.durationSeconds,
-        durationMinutes: Math.round(l.durationSeconds / 60),
-        note: l.note,
-        startTime: l.startTime.toISOString(),
-        endTime: l.endTime?.toISOString() || null,
-        createdAt: l.createdAt.toISOString(),
-      })),
-    };
+    return TaskTimeService.getInstance().listTimeLogs(orgId, taskId);
   }
 }
