@@ -19,14 +19,13 @@ import {
   Crown,
 } from 'lucide-react';
 import { CloudFileItem, FilePermission } from './types';
-import { PRESET_USERS } from '../zalo/mockData';
-import { getUnifiedUsers } from '../../lib/domain-event-bus';
+import { useAuth } from '../../context/AuthContext';
 
 export interface FileShareModalProps {
   file: CloudFileItem | null;
-  isOpen: boolean;
+  isOpen?: boolean;
   onClose: () => void;
-  onUpdateShareSettings: (
+  onUpdateShareSettings?: (
     fileId: string,
     permission: FilePermission,
     settings: any
@@ -35,17 +34,20 @@ export interface FileShareModalProps {
 
 export function FileShareModal({
   file,
-  isOpen,
+  isOpen = true,
   onClose,
   onUpdateShareSettings,
 }: FileShareModalProps) {
-  const [users, setUsers] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const u = getUnifiedUsers();
-      if (u.length > 0) return u;
+  const { user, workspace, token } = useAuth();
+  const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api').replace(/\/+$/, '');
+
+  const [users, setUsers] = useState<any[]>(() => {
+    if (user) {
+      return [{ id: user.userId, name: user.name, role: workspace?.role || 'member', color: '#3b82f6' }];
     }
-    return PRESET_USERS;
+    return [];
   });
+
   const [copied, setCopied] = useState(false);
   const [permission, setPermission] = useState<FilePermission>(file?.permission || 'editor');
   const [linkAccess, setLinkAccess] = useState<'anyone' | 'organization' | 'restricted'>(
@@ -59,14 +61,31 @@ export function FileShareModal({
   );
   const [password, setPassword] = useState<string>(file?.shareSettings?.password || '');
   const [expiresAt, setExpiresAt] = useState<string>(file?.shareSettings?.expiresAt || '');
+  const [memberRoles, setMemberRoles] = useState<Record<string, FilePermission>>({});
 
-  const [memberRoles, setMemberRoles] = useState<Record<string, FilePermission>>({
-    usr_nam: 'owner',
-    usr_mai: 'editor',
-    usr_long: 'commenter',
-    usr_alice: 'editor',
-    usr_bob: 'viewer',
-  });
+  React.useEffect(() => {
+    if (!token || !workspace) return;
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (workspace?.orgId) headers['x-workspace-id'] = workspace.orgId;
+
+    fetch(`${apiUrl}/members`, { headers })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success && Array.isArray(d.data) && d.data.length > 0) {
+          const colors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
+          setUsers(
+            d.data.map((m: any, idx: number) => ({
+              id: m.id || m.userId,
+              name: m.name,
+              role: m.role,
+              color: colors[idx % colors.length],
+            }))
+          );
+        }
+      })
+      .catch((err) => console.warn('Failed to load workspace members:', err));
+  }, [token, workspace, apiUrl]);
 
   if (!isOpen || !file) return null;
 
@@ -80,14 +99,33 @@ export function FileShareModal({
     }
   };
 
-  const handleSave = () => {
-    onUpdateShareSettings(file.id, permission, {
+  const handleSave = async () => {
+    const payload = {
       linkAccess,
       allowDownload,
+      permission: permission === 'owner' ? 'editor' : permission,
       hasPassword,
       password: hasPassword ? password : '',
       expiresAt: expiresAt || undefined,
-    });
+    };
+
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      if (workspace?.orgId) headers['x-workspace-id'] = workspace.orgId;
+
+      await fetch(`${apiUrl}/files/${file.id}/share`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      console.warn('Failed to save share settings to API:', err);
+    }
+
+    if (onUpdateShareSettings) {
+      onUpdateShareSettings(file.id, permission, payload);
+    }
     onClose();
   };
 
@@ -160,8 +198,8 @@ export function FileShareModal({
 
             <p className="text-[11px] text-zinc-500 leading-relaxed">
               {permission === 'viewer' && 'Người nhận chỉ có thể xem tệp, không được chỉnh sửa.'}
-              {permission === 'commenter' && 'Người nhận có thể xem và để lại bình luận hoặc gợi ý.'}
-              {permission === 'editor' && 'Người nhận có thể xem, chỉnh sửa nội dung và tải lên bản mới.'}
+              {permission === 'commenter' && 'Người nhận có thể xem và để lại bình luận hoặc nhận xét.'}
+              {permission === 'editor' && 'Người nhận có thể xem, đổi tên, phân loại và bình luận tệp.'}
               {permission === 'owner' && 'Toàn quyền quản lý tệp, phân quyền thành viên và xóa tệp.'}
             </p>
           </div>

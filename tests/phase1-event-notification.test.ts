@@ -194,17 +194,21 @@ describe('PHASE 1: Server Event Infrastructure & Unified Notification Hub Test S
         origin: { chainDepth: 0 },
       });
 
-      const processedCount = await relay.processBatch(10);
-      assert.ok(processedCount >= 1, 'Should have processed at least 1 pending event');
+      try {
+        const processedCount = await relay.processBatch(10, userA.orgId);
+        assert.ok(processedCount >= 1, 'Should have processed at least 1 pending event');
 
-      // Check PostgreSQL record status
-      const updated = await prisma.outboxEvent.findUnique({ where: { id: testId } });
-      assert.ok(updated);
-      assert.ok(updated.processedAt !== null, 'processedAt timestamp must be recorded');
+        // Check PostgreSQL record status
+        const updated = await prisma.outboxEvent.findUnique({ where: { id: testId } });
+        assert.ok(updated);
+        assert.ok(updated.processedAt !== null, 'processedAt timestamp must be recorded');
 
-      // Check EventBus delivery
-      assert.ok(receivedEvent, 'EventBus subscriber must have received the event');
-      assert.strictEqual(receivedEvent.data.message, 'hello from relay test');
+        // Check EventBus delivery
+        assert.ok(receivedEvent, 'EventBus subscriber must have received the event');
+        assert.strictEqual(receivedEvent.data.message, 'hello from relay test');
+      } finally {
+        await prisma.outboxEvent.delete({ where: { id: testId } }).catch(() => {});
+      }
     });
 
     test('publishDomainEvent helper stages to outbox and dispatches synchronously to EventBus', async () => {

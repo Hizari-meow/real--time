@@ -3,6 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "test:warnings": "tsx --test phase4-warning-remediation.test.ts",
+    "test:remediation": "tsx --test phase4-remediation.test.ts && tsx --test phase4-remediation-deep.test.ts",
+    "test:quota-mp": "tsx --test phase4-quota-multiprocess.test.ts",
+    "test:gate4": "tsx --test audit-phase4-gate.ts",
+    "test:phase4": "tsx --test phase4-file-storage.test.ts phase4-wiki-knowledge.test.ts phase4-doc-comment.test.ts",
     "test:phase3": "tsx --test phase3-task-project.test.ts",
     "test:phase2": "tsx --test phase2-chat.test.ts",
     "test:final-gate": "tsx --test phase1-final-gate.test.ts",

@@ -16,6 +16,9 @@ import { membersRouter } from './routes/members.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { chatRouter } from './routes/chat.js';
 import { projectsRouter, sprintsRouter } from './routes/projects.js';
+import { foldersRouter } from './routes/folders.js';
+import { wikiRouter } from './routes/wiki.js';
+import { commentsRouter } from './routes/comments.js';
 import { NotificationService } from './core/notification/NotificationService.js';
 import { getOutboxRelay } from './core/events/event-system.js';
 import { RoomManager } from './ws/room-manager.js';
@@ -85,7 +88,8 @@ export async function createApp(): Promise<AppInstance> {
   app.use(cors(corsOptions));
   app.options('*', cors(corsOptions));
   app.use(cookieParser());
-  app.use(express.json());
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
   // Health check endpoint
   app.get('/health', (req, res) => {
@@ -105,6 +109,9 @@ export async function createApp(): Promise<AppInstance> {
   app.use('/api/documents', restoreRouter);
   app.use('/api/tasks', tasksRouter);
   app.use('/api/files', filesRouter);
+  app.use('/api/folders', foldersRouter);
+  app.use('/api/wiki', wikiRouter);
+  app.use('/api/documents', commentsRouter);
   app.use('/api/audit', auditRouter);
   app.use('/api/ai', aiRouter);
   app.use('/api/automations', automationsRouter);

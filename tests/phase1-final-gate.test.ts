@@ -285,14 +285,18 @@ describe('PHASE 1 FINAL ACCEPTANCE GATE VERIFICATION SUITE', () => {
         eventDelivered = true;
       });
 
-      const relay = new OutboxRelay(storage, bus);
-      const processedCount = await relay.processBatch(10);
-      assert.ok(processedCount >= 1, 'OutboxRelay MUST pick up and process pending events');
+      try {
+        const relay = new OutboxRelay(storage, bus);
+        const processedCount = await relay.processBatch(10, userA.orgId);
+        assert.ok(processedCount >= 1, 'OutboxRelay MUST pick up and process pending events');
 
-      const dbAfter = await prisma.outboxEvent.findUnique({ where: { id: eventId } });
-      assert.ok(dbAfter);
-      assert.ok(dbAfter.processedAt !== null, 'processedAt timestamp must be recorded after processing');
-      assert.strictEqual(eventDelivered, true, 'Event payload MUST be delivered to subscriber');
+        const dbAfter = await prisma.outboxEvent.findUnique({ where: { id: eventId } });
+        assert.ok(dbAfter);
+        assert.ok(dbAfter.processedAt !== null, 'processedAt timestamp must be recorded after processing');
+        assert.strictEqual(eventDelivered, true, 'Event payload MUST be delivered to subscriber');
+      } finally {
+        await prisma.outboxEvent.delete({ where: { id: eventId } }).catch(() => {});
+      }
     });
 
     test('Events remaining unprocessed stay in PostgreSQL indefinitely and are not lost', async () => {
@@ -315,14 +319,18 @@ describe('PHASE 1 FINAL ACCEPTANCE GATE VERIFICATION SUITE', () => {
         attempts: 0,
       });
 
-      // Query multiple times over simulated period: event remains intact on disk
-      const check1 = await prisma.outboxEvent.findUnique({ where: { id: eventId } });
-      assert.ok(check1, 'Event remains on disk');
-      assert.strictEqual(check1.processedAt, null);
+      try {
+        // Query multiple times over simulated period: event remains intact on disk
+        const check1 = await prisma.outboxEvent.findUnique({ where: { id: eventId } });
+        assert.ok(check1, 'Event remains on disk');
+        assert.strictEqual(check1.processedAt, null);
 
-      const pendingList = await storage.fetchPending(50);
-      const found = pendingList.find((e) => e.id === eventId);
-      assert.ok(found, 'Pending query MUST find unprocessed event');
+        const pendingList = await storage.fetchPending(50, userA.orgId);
+        const found = pendingList.find((e) => e.id === eventId);
+        assert.ok(found, 'Pending query MUST find unprocessed event');
+      } finally {
+        await prisma.outboxEvent.delete({ where: { id: eventId } }).catch(() => {});
+      }
     });
 
     test('Excessive chain depth (chainDepth >= 5) is rejected by EventBus and OutboxRelay does NOT mark it processed', async () => {
@@ -344,13 +352,17 @@ describe('PHASE 1 FINAL ACCEPTANCE GATE VERIFICATION SUITE', () => {
         origin: { chainDepth: 5 }, // Exceeds limit
       });
 
-      await relay.processBatch(10);
+      try {
+        await relay.processBatch(10, userA.orgId);
 
-      // Verify that loop-rejected event was NOT marked processed
-      const dbEvent = await prisma.outboxEvent.findUnique({ where: { id: eventId } });
-      assert.ok(dbEvent);
-      assert.strictEqual(dbEvent.processedAt, null, 'Looping event MUST NOT be marked processed');
-      assert.strictEqual(dbEvent.attempts, 1, 'attempts count must increment');
+        // Verify that loop-rejected event was NOT marked processed
+        const dbEvent = await prisma.outboxEvent.findUnique({ where: { id: eventId } });
+        assert.ok(dbEvent);
+        assert.strictEqual(dbEvent.processedAt, null, 'Looping event MUST NOT be marked processed');
+        assert.strictEqual(dbEvent.attempts, 1, 'attempts count must increment');
+      } finally {
+        await prisma.outboxEvent.delete({ where: { id: eventId } }).catch(() => {});
+      }
     });
 
     test('Investigation of handler failure behavior in EventBus', async () => {
@@ -378,15 +390,19 @@ describe('PHASE 1 FINAL ACCEPTANCE GATE VERIFICATION SUITE', () => {
         origin: { chainDepth: 0 },
       });
 
-      await relay.processBatch(10);
+      try {
+        await relay.processBatch(10, userA.orgId);
 
-      const dbEvent = await prisma.outboxEvent.findUnique({ where: { id: eventId } });
-      assert.ok(dbEvent);
-      assert.strictEqual(handlerCalled, true);
-      // Documenting current implementation behavior:
-      // EventBus catches the handler exception and returns true, causing OutboxRelay to mark processedAt
-      const wasMarkedProcessed = dbEvent.processedAt !== null;
-      assert.strictEqual(wasMarkedProcessed, true, 'Current implementation marks processedAt because EventBus swallows handler errors');
+        const dbEvent = await prisma.outboxEvent.findUnique({ where: { id: eventId } });
+        assert.ok(dbEvent);
+        assert.strictEqual(handlerCalled, true);
+        // Documenting current implementation behavior:
+        // EventBus catches the handler exception and returns true, causing OutboxRelay to mark processedAt
+        const wasMarkedProcessed = dbEvent.processedAt !== null;
+        assert.strictEqual(wasMarkedProcessed, true, 'Current implementation marks processedAt because EventBus swallows handler errors');
+      } finally {
+        await prisma.outboxEvent.delete({ where: { id: eventId } }).catch(() => {});
+      }
     });
   });
 

@@ -157,17 +157,69 @@ model Task {
 }
 
 model FileRecord {
-  id        String   @id @default(uuid())
-  name      String
-  s3Key     String   @unique
-  byteSize  Int
-  mimeType  String
-  category  String   @default("other")
-  ownerName String   @default("System")
-  createdAt DateTime @default(now())
+  id                String    @id @default(uuid())
+  orgId             String    @default("org_main")
+  folderId          String?
+  ownerId           String?
+  name              String
+  s3Key             String    @unique
+  byteSize          Int
+  mimeType          String
+  category          String    @default("other")
+  ownerName         String    @default("System")
+  isStarred         Boolean   @default(false)
+  isDeleted         Boolean   @default(false)
+  deletedAt         DateTime?
+  versionsJson      String    @default("[]")
+  shareSettingsJson String    @default("{}")
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @default(now()) @updatedAt
 
+  @@index([orgId])
+  @@index([folderId])
   @@index([category])
+  @@index([isDeleted])
   @@map("file_records")
+}
+
+model Folder {
+  id        String   @id @default(uuid())
+  orgId     String   @default("org_main")
+  name      String
+  category  String   @default("team") // team, project, personal
+  color     String   @default("#3b82f6")
+  ownerId   String?
+  ownerName String   @default("System")
+  parentId  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([orgId])
+  @@index([parentId])
+  @@map("folders")
+}
+
+model StorageQuota {
+  orgId      String   @id
+  quotaBytes BigInt   @default(10737418240) // 10 GB
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("storage_quotas")
+}
+
+model StorageReservation {
+  id        String   @id
+  orgId     String
+  bytes     BigInt   @default(0)
+  status    String   @default("pending") // pending, committed, released, expired
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId, status])
+  @@index([expiresAt])
+  @@map("storage_reservations")
 }
 
 model AuditLog {
@@ -323,22 +375,48 @@ model WikiPage {
   id           String       @id @default(uuid())
   orgId        String
   org          Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  parentId     String?
   title        String
   areaId       String       @default("general")
   topic        String?
   type         String       @default("SOP") // SOP, Guide, Document, Decision
   owner        String
+  icon         String?      @default("📄")
   status       String       @default("draft") // draft, pending_approval, approved
   lastReviewed String?
   tags         String[]
   summary      String?
   content      String
+  isArchived   Boolean      @default(false)
+  linkedDocId  String?
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
   @@index([orgId])
   @@index([areaId])
+  @@index([parentId])
+  @@index([isArchived])
   @@map("wiki_pages")
+}
+
+model DocumentComment {
+  id           String   @id @default(uuid())
+  orgId        String   @default("org_main")
+  documentId   String
+  authorId     String
+  authorName   String
+  authorAvatar String?
+  content      String
+  anchorJson   String?
+  status       String   @default("open") // open, resolved
+  parentId     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
+
+  @@index([documentId])
+  @@index([orgId])
+  @@index([parentId])
+  @@map("document_comments")
 }
 
 model Notification {

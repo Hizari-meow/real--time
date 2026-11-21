@@ -56,3 +56,58 @@ export async function publishDomainEvent<T = Record<string, unknown>>(
 
   return envelope;
 }
+
+/**
+ * Stage an event into the Outbox table within an existing Prisma transaction client (tx).
+ * Ensures that business mutation and outbox event commit/rollback atomically!
+ */
+export async function stageOutboxEventInTransaction<T = Record<string, unknown>>(
+  tx: any,
+  eventData: {
+    type: string;
+    orgId: string;
+    actor: { type: 'user' | 'bot' | 'system' | 'automation'; id: string; name?: string };
+    resource: { type: string; id: string; [key: string]: any };
+    data: T;
+    origin?: { automationId?: string | null; chainDepth: number };
+  }
+): Promise<DomainEventEnvelope<T>> {
+  const envelope: DomainEventEnvelope<T> = {
+    id: `evt_${crypto.randomUUID()}`,
+    type: eventData.type,
+    version: 1,
+    orgId: eventData.orgId,
+    actor: eventData.actor,
+    occurredAt: new Date().toISOString(),
+    resource: eventData.resource,
+    data: eventData.data,
+    origin: eventData.origin || { chainDepth: 0 },
+  };
+
+  await tx.outboxEvent.create({
+    data: {
+      id: envelope.id,
+      type: envelope.type,
+      orgId: envelope.orgId,
+      payload: JSON.stringify(envelope),
+      occurredAt: new Date(envelope.occurredAt),
+      processedAt: null,
+      attempts: 0,
+    },
+  });
+
+  return envelope;
+}
+
+/**
+ * Notify EventBus after transaction commits and mark processed in Outbox
+ */
+export async function dispatchCommittedOutboxEvent(envelope: DomainEventEnvelope<any>): Promise<void> {
+  try {
+    await getEventBus().dispatch(envelope as any);
+    await getOutboxRelay().markProcessed(envelope.id);
+  } catch (err) {
+    console.warn(`[Outbox] Post-commit dispatch deferred to OutboxRelay poller:`, err);
+  }
+}
+

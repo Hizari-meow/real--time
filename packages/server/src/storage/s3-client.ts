@@ -6,8 +6,10 @@ import {
   CreateBucketCommand,
   ListObjectsV2Command,
   DeleteObjectCommand,
+  PutBucketLifecycleConfigurationCommand,
 } from '@aws-sdk/client-s3';
 import { Readable } from 'node:stream';
+import { Upload } from '@aws-sdk/lib-storage';
 import { config } from '../config.js';
 
 export class S3StorageService {
@@ -47,6 +49,33 @@ export class S3StorageService {
         console.error(`[S3StorageService] Failed to create bucket ${this.bucket}:`, err);
       }
     }
+
+    // Configure lifecycle policy to automatically clean up incomplete multipart uploads after 1 day
+    try {
+      await this.client.send(
+        new PutBucketLifecycleConfigurationCommand({
+          Bucket: this.bucket,
+          LifecycleConfiguration: {
+            Rules: [
+              {
+                ID: 'abort-incomplete-multipart-uploads',
+                Status: 'Enabled',
+                Filter: { Prefix: '' },
+                AbortIncompleteMultipartUpload: {
+                  DaysAfterInitiation: 1,
+                },
+                Expiration: {
+                  Days: 3650,
+                },
+              },
+            ],
+          },
+        })
+      );
+    } catch (lifecycleErr: any) {
+      // MinIO supports S3 Lifecycle; log if already present or unsupported
+      console.warn(`[S3StorageService] Lifecycle configuration notice:`, lifecycleErr.message);
+    }
   }
 
   public async saveSnapshot(key: string, data: Uint8Array): Promise<void> {
@@ -77,6 +106,11 @@ export class S3StorageService {
     return new Uint8Array(Buffer.concat(chunks));
   }
 
+  public async getFile(key: string): Promise<Buffer> {
+    const uint8 = await this.getSnapshot(key);
+    return Buffer.from(uint8);
+  }
+
   public async listFiles(prefix = ''): Promise<{ key: string; size: number; lastModified?: Date }[]> {
     try {
       const command = new ListObjectsV2Command({
@@ -103,6 +137,29 @@ export class S3StorageService {
       ContentType: contentType,
     });
     await this.client.send(command);
+  }
+
+  public async uploadStream(key: string, stream: Readable, contentType = 'application/octet-stream'): Promise<void> {
+    const parallelUpload = new Upload({
+      client: this.client,
+      params: {
+        Bucket: this.bucket,
+        Key: key,
+        Body: stream,
+        ContentType: contentType,
+      },
+    });
+
+    try {
+      await parallelUpload.done();
+    } catch (uploadErr) {
+      try {
+        await parallelUpload.abort();
+      } catch (abortErr) {
+        console.warn(`[S3StorageService] Abort multipart upload error for ${key}:`, abortErr);
+      }
+      throw uploadErr;
+    }
   }
 
   public async deleteObject(key: string): Promise<void> {

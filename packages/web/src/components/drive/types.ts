@@ -1,5 +1,7 @@
 export type FileCategory = 'document' | 'image' | 'spreadsheet' | 'snapshot' | 'code' | 'archive' | 'other';
 export type FilePermission = 'viewer' | 'commenter' | 'editor' | 'owner';
+export type DriveTab = 'all' | 'recent' | 'starred' | 'trash' | 'my_drive' | 'shared';
+export type FileSortBy = 'name' | 'date' | 'size' | 'category';
 
 export interface FileVersionItem {
   version: number;
@@ -29,6 +31,7 @@ export interface CloudFileItem {
   shareSettings?: {
     linkAccess: 'anyone' | 'organization' | 'restricted';
     allowDownload: boolean;
+    permission?: FilePermission;
     hasPassword?: boolean;
     password?: string;
     expiresAt?: string;

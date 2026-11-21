@@ -3,7 +3,7 @@ import { EventBus } from './EventBus';
 
 export interface OutboxStorage {
   insert(record: OutboxRecord): Promise<void>;
-  fetchPending(limit: number): Promise<OutboxRecord[]>;
+  fetchPending(limit: number, orgId?: string): Promise<OutboxRecord[]>;
   markProcessed(id: string): Promise<void>;
   incrementAttempts(id: string): Promise<void>;
 }
@@ -15,10 +15,10 @@ export class InMemoryOutboxStorage implements OutboxStorage {
     this.records.set(record.id, { ...record });
   }
 
-  async fetchPending(limit: number): Promise<OutboxRecord[]> {
+  async fetchPending(limit: number, orgId?: string): Promise<OutboxRecord[]> {
     const pending: OutboxRecord[] = [];
     for (const rec of this.records.values()) {
-      if (!rec.processedAt) {
+      if (!rec.processedAt && (!orgId || rec.orgId === orgId)) {
         pending.push({ ...rec });
         if (pending.length >= limit) break;
       }
@@ -66,9 +66,14 @@ export class PrismaOutboxStorage implements OutboxStorage {
     });
   }
 
-  async fetchPending(limit: number): Promise<OutboxRecord[]> {
+  async fetchPending(limit: number, orgId?: string): Promise<OutboxRecord[]> {
+    const where: any = { processedAt: null };
+    if (orgId) {
+      where.orgId = orgId;
+    }
+
     const rows = await this.prisma.outboxEvent.findMany({
-      where: { processedAt: null },
+      where,
       orderBy: { occurredAt: 'asc' },
       take: limit,
     });
@@ -135,12 +140,12 @@ export class OutboxRelay {
   /**
    * Process a batch of pending outbox events
    */
-  async processBatch(limit: number = 50): Promise<number> {
+  async processBatch(limit: number = 50, orgId?: string): Promise<number> {
     if (this.isProcessing) return 0;
     this.isProcessing = true;
 
     try {
-      const pending = await this.storage.fetchPending(limit);
+      const pending = await this.storage.fetchPending(limit, orgId);
       for (const record of pending) {
         try {
           await this.storage.incrementAttempts(record.id);

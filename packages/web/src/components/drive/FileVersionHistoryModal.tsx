@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { useAuth } from '../../context/AuthContext';
 import {
   X,
   Clock,
@@ -17,19 +18,23 @@ import { CloudFileItem, FileVersionItem } from './types';
 
 export interface FileVersionHistoryModalProps {
   file: CloudFileItem | null;
-  isOpen: boolean;
+  isOpen?: boolean;
   onClose: () => void;
-  onRestoreVersion: (fileId: string, versionNumber: number) => void;
-  onAddMilestoneName: (fileId: string, versionNumber: number, nameTag: string) => void;
+  onRestoreVersion?: (fileId: string, versionNumber: number) => void;
+  onRevertVersion?: (versionNumber: number) => void;
+  onAddMilestoneName?: (fileId: string, versionNumber: number, nameTag: string) => void;
 }
 
 export function FileVersionHistoryModal({
   file,
-  isOpen,
+  isOpen = true,
   onClose,
   onRestoreVersion,
+  onRevertVersion,
   onAddMilestoneName,
 }: FileVersionHistoryModalProps) {
+  const { token, workspace } = useAuth();
+  const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api').replace(/\/+$/, '');
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [isEditingTag, setIsEditingTag] = useState<number | null>(null);
   const [tagInput, setTagInput] = useState('');
@@ -54,7 +59,7 @@ export function FileVersionHistoryModal({
 
   const handleSaveTag = (verNum: number) => {
     if (tagInput.trim()) {
-      onAddMilestoneName(file.id, verNum, tagInput.trim());
+      onAddMilestoneName?.(file.id, verNum, tagInput.trim());
       setIsEditingTag(null);
       setTagInput('');
     }
@@ -188,13 +193,25 @@ export function FileVersionHistoryModal({
 
                       {!isCurrent && (
                         <button
-                          onClick={() => {
+                          onClick={async () => {
                             if (
                               confirm(
                                 `Bạn có chắc muốn khôi phục tệp về Phiên bản ${ver.version}?`
                               )
                             ) {
-                              onRestoreVersion(file.id, ver.version);
+                              try {
+                                const headers: Record<string, string> = {};
+                                if (token) headers['Authorization'] = `Bearer ${token}`;
+                                if (workspace?.orgId) headers['x-workspace-id'] = workspace.orgId;
+                                await fetch(`${apiUrl}/files/${file.id}/versions/${ver.version}/revert`, {
+                                  method: 'POST',
+                                  headers,
+                                });
+                              } catch (err) {
+                                console.warn('Failed to revert file version:', err);
+                              }
+                              if (onRestoreVersion) onRestoreVersion(file.id, ver.version);
+                              if (onRevertVersion) onRevertVersion(ver.version);
                               onClose();
                             }
                           }}

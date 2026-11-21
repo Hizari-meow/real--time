@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useAuth } from '../../context/AuthContext';
 import {
   X,
   Download,
@@ -10,15 +11,13 @@ import {
   Table as TableIcon,
   Layers,
   Code,
-  Printer,
   ZoomIn,
   ZoomOut,
-  ChevronLeft,
-  ChevronRight,
-  ShieldCheck,
   Calendar,
   User,
   HardDrive,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
 import { CloudFileItem } from './types';
 
@@ -37,8 +36,56 @@ export function FilePreviewModal({
   onShare,
   onDownload,
 }: FilePreviewModalProps) {
+  const { token, workspace } = useAuth();
+  const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api').replace(/\/+$/, '');
+
   const [zoomLevel, setZoomLevel] = useState(100);
-  const [currentPage, setCurrentPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [previewData, setPreviewData] = useState<any>(null);
+
+  useEffect(() => {
+    if (!isOpen || !file) {
+      setPreviewData(null);
+      setError(null);
+      return;
+    }
+
+    let isMounted = true;
+    setLoading(true);
+    setError(null);
+
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (workspace?.orgId) headers['x-workspace-id'] = workspace.orgId;
+
+    fetch(`${apiUrl}/files/${file.id}/preview`, { headers })
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error(`Máy chủ phản hồi mã lỗi ${res.status}`);
+        }
+        return res.json();
+      })
+      .then((data) => {
+        if (!isMounted) return;
+        if (data.success && data.data) {
+          setPreviewData(data.data);
+        } else {
+          setError(data.error || 'Không thể xem trước tệp này');
+        }
+      })
+      .catch((err: any) => {
+        if (!isMounted) return;
+        setError(err.message || 'Lỗi kết nối khi tải nội dung xem trước');
+      })
+      .finally(() => {
+        if (isMounted) setLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, file, token, workspace, apiUrl]);
 
   if (!isOpen || !file) return null;
 
@@ -48,7 +95,8 @@ export function FilePreviewModal({
     return bytes + ' B';
   };
 
-  const totalPages = file.previewContent?.pdfPages || 4;
+  const fileCategory = previewData?.category || file.category;
+  const previewType = previewData?.previewType;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
@@ -57,13 +105,13 @@ export function FilePreviewModal({
         <div className="h-16 px-6 border-b border-zinc-200 bg-zinc-50/80 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 rounded-xl bg-white border border-zinc-200 shadow-xs flex items-center justify-center shrink-0">
-              {file.category === 'image' ? (
+              {fileCategory === 'image' ? (
                 <ImageIcon className="w-5 h-5 text-pink-600" />
-              ) : file.category === 'spreadsheet' ? (
+              ) : fileCategory === 'spreadsheet' ? (
                 <TableIcon className="w-5 h-5 text-emerald-600" />
-              ) : file.category === 'snapshot' ? (
+              ) : fileCategory === 'snapshot' ? (
                 <Layers className="w-5 h-5 text-blue-600" />
-              ) : file.category === 'code' ? (
+              ) : fileCategory === 'code' ? (
                 <Code className="w-5 h-5 text-purple-600" />
               ) : (
                 <FileText className="w-5 h-5 text-indigo-600" />
@@ -95,7 +143,7 @@ export function FilePreviewModal({
           {/* Action Toolbar */}
           <div className="flex items-center gap-2 shrink-0">
             {/* Zoom Controls for PDF / Image */}
-            {(file.category === 'document' || file.category === 'image') && (
+            {previewType === 'image' && (
               <div className="hidden sm:flex items-center bg-zinc-100 p-0.5 rounded-xl border border-zinc-200 text-xs">
                 <button
                   onClick={() => setZoomLevel((z) => Math.max(50, z - 25))}
@@ -147,243 +195,134 @@ export function FilePreviewModal({
 
         {/* Content Viewer Area */}
         <div className="flex-1 bg-zinc-100/70 p-4 sm:p-6 overflow-auto flex items-center justify-center">
-          {/* 1. PDF / Document Preview */}
-          {file.category === 'document' && (
-            <div
-              className="bg-white rounded-xl shadow-lg border border-zinc-200 p-8 sm:p-12 w-full max-w-2xl min-h-[500px] flex flex-col justify-between transition-transform duration-200"
-              style={{ transform: `scale(${zoomLevel / 100})`, transformOrigin: 'top center' }}
-            >
-              <div className="space-y-4">
-                <div className="flex items-center justify-between border-b border-zinc-200 pb-4">
-                  <div>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
-                      Tài liệu dự án • Phiên bản chính thức
-                    </span>
-                    <h2 className="text-xl font-bold text-zinc-900 mt-2">{file.name}</h2>
-                    <p className="text-xs text-zinc-500 mt-0.5">
-                      Tác giả: {file.ownerName} • Đã đồng bộ mã hóa lưu trữ S3
-                    </p>
-                  </div>
-                  <a
-                    href={`/doc/${file.id === 'f-1' ? 'doc_rfc_consensus' : file.id === 'f-4' ? 'doc_sop_01' : file.id}`}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors shrink-0 ml-4"
-                  >
-                    <span>Mở Soạn Thảo Đầy Đủ</span>
-                  </a>
-                </div>
-
-                <div className="text-xs text-zinc-700 space-y-3 leading-relaxed font-serif">
-                  <p>
-                    {file.previewContent?.textSample ||
-                      'Tài liệu này quy định cấu trúc thiết kế, kiến trúc cụm Gateway phân tán và các quy tắc bảo mật vận hành thời gian thực. Tất cả các thay đổi được ghi nhận tự động vào cơ chế chụp Snapshot CRDT.'}
-                  </p>
-                  <p>
-                    1. <strong>Mục tiêu kỹ thuật</strong>: Đảm bảo khả năng chịu lỗi phân tán cao, độ trễ
-                    đồng bộ dưới 50ms khi xử lý đồng thời 10.000 kết nối WebSocket qua NGINX reverse
-                    proxy.
-                  </p>
-                  <p>
-                    2. <strong>Quy trình phê duyệt</strong>: Mọi thành viên có quyền Chỉnh sửa (Editor)
-                    có thể cập nhật phiên bản mới, hệ thống tự động lưu trữ các mốc lịch sử để khôi phục
-                    khi cần thiết.
-                  </p>
-                </div>
-              </div>
-
-              {/* PDF Footer page indicator */}
-              <div className="pt-6 border-t border-zinc-100 flex items-center justify-between text-xs text-zinc-400">
-                <span>Bản quyền nội bộ © 2026 Collaborative Workspace</span>
-                <span className="font-mono">
-                  Trang {currentPage} / {totalPages}
-                </span>
-              </div>
+          {/* Loading state */}
+          {loading && (
+            <div className="flex flex-col items-center justify-center gap-3 text-zinc-500">
+              <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+              <p className="text-xs font-medium">Đang tải nội dung xem trước...</p>
             </div>
           )}
 
-          {/* 2. Image Preview */}
-          {file.category === 'image' && (
-            <div
-              className="flex flex-col items-center justify-center transition-transform duration-200"
-              style={{ transform: `scale(${zoomLevel / 100})` }}
-            >
-              <div className="bg-white p-3 rounded-2xl shadow-xl border border-zinc-200 max-w-xl">
-                <div className="w-full h-80 rounded-xl bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 flex flex-col items-center justify-center p-6 border border-zinc-100 relative overflow-hidden">
-                  <ImageIcon className="w-16 h-16 text-indigo-400/70 mb-3" />
-                  <p className="text-sm font-bold text-zinc-800">{file.name}</p>
-                  <p className="text-xs text-zinc-500 mt-1 font-mono">
-                    Độ phân giải: 1920 x 1080 • Định dạng: PNG 24-bit
-                  </p>
-                  <span className="mt-3 px-3 py-1 bg-white/80 backdrop-blur-xs rounded-full text-[10px] font-semibold text-zinc-700 shadow-xs border border-zinc-200">
-                    Ảnh mẫu xem trước
-                  </span>
-                </div>
-              </div>
+          {/* Error state */}
+          {!loading && error && (
+            <div className="bg-white rounded-2xl p-8 border border-zinc-200 shadow-md max-w-md text-center flex flex-col items-center gap-3">
+              <AlertCircle className="w-10 h-10 text-amber-500" />
+              <h4 className="text-sm font-bold text-zinc-900">Không thể xem trước tệp</h4>
+              <p className="text-xs text-zinc-500 leading-relaxed">{error}</p>
+              <button
+                onClick={() => onDownload(file)}
+                className="mt-2 inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all"
+              >
+                <Download className="w-4 h-4" />
+                <span>Tải về để mở trên máy tính</span>
+              </button>
             </div>
           )}
 
-          {/* 3. Spreadsheet (Excel / CSV) Preview */}
-          {file.category === 'spreadsheet' && (
-            <div className="bg-white rounded-xl shadow-lg border border-zinc-200 p-6 w-full max-w-3xl overflow-x-auto space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
-                <div className="flex items-center gap-2">
-                  <TableIcon className="w-4 h-4 text-emerald-600" />
-                  <span className="text-xs font-bold text-zinc-900">Xem trước bảng tính: {file.name}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-mono text-zinc-400">Sheet 1 • Công thức SUM/VAT</span>
-                  <a
-                    href={`/sheet/${file.id === 'f-2' ? 'sheet_fin_q4' : file.id}`}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors"
-                  >
-                    <span>Mở Bảng Tính Excel Đầy Đủ</span>
-                  </a>
-                </div>
+          {/* 1. Real Text / Code preview */}
+          {!loading && !error && previewType === 'text' && (
+            <div className="bg-white rounded-xl shadow-lg border border-zinc-200 p-6 w-full max-w-3xl overflow-auto max-h-[70vh]">
+              <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-100 text-xs text-zinc-500">
+                <span className="font-semibold text-zinc-800">{file.name}</span>
+                <span className="font-mono text-[11px]">{previewData.mimeType || 'text/plain'}</span>
               </div>
-
-              <table className="w-full text-left text-xs border border-zinc-200 rounded-lg overflow-hidden font-mono">
-                <thead className="bg-zinc-100 text-zinc-700 font-bold border-b border-zinc-200">
-                  <tr>
-                    <th className="p-2 border-r border-zinc-200 w-10 text-center text-zinc-400">#</th>
-                    <th className="p-2 border-r border-zinc-200">A (Chỉ tiêu)</th>
-                    <th className="p-2 border-r border-zinc-200">B (Kế hoạch Q4)</th>
-                    <th className="p-2 border-r border-zinc-200">C (Thực tế Q4)</th>
-                    <th className="p-2 border-r border-zinc-200">D (Tăng trưởng %)</th>
-                    <th className="p-2">E (Trạng thái)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-200 text-[11px]">
-                  {[
-                    { row: 10, a: 'Người dùng mới (Active)', b: '100,000', c: '125,400', d: '+25.4%', e: 'Vượt chỉ tiêu' },
-                    { row: 11, a: 'Doanh thu bản quyền Enterprise', b: '$80,000', c: '$92,500', d: '+15.6%', e: 'Đạt SLA' },
-                    { row: 12, a: 'Doanh thu SaaS thực tế (C12)', b: '$110,000', c: '$128,400', d: '+16.7%', e: 'Đang thảo luận' },
-                    { row: 13, a: 'Chi phí hạ tầng máy chủ Cluster', b: '$25,000', c: '$22,100', d: '-11.6%', e: 'Tiết kiệm tốt' },
-                    { row: 14, a: 'Lợi nhuận ròng tạm tính', b: '$165,000', c: '$198,800', d: '+20.5%', e: 'Đạt kỳ vọng' },
-                  ].map((r) => (
-                    <tr key={r.row} className={`hover:bg-zinc-50 ${r.row === 12 ? 'bg-amber-50/70 font-semibold' : ''}`}>
-                      <td className="p-2 border-r border-zinc-200 text-center text-zinc-400">{r.row}</td>
-                      <td className="p-2 border-r border-zinc-200 font-sans text-zinc-900">{r.a}</td>
-                      <td className="p-2 border-r border-zinc-200 text-zinc-700">{r.b}</td>
-                      <td className="p-2 border-r border-zinc-200 text-emerald-700 font-bold">{r.c}</td>
-                      <td className="p-2 border-r border-zinc-200 text-blue-600 font-bold">{r.d}</td>
-                      <td className="p-2">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          r.row === 12 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-50 text-emerald-700'
-                        }`}>
-                          {r.e}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="p-2.5 bg-zinc-50 rounded-lg text-[11px] text-zinc-600 flex items-center justify-between">
-                <span>💡 Ô C12 đang có bình luận trao đổi về công thức tính thuế từ đội ngũ kế toán.</span>
-                <a
-                  href={`/sheet/${file.id === 'f-2' ? 'sheet_fin_q4' : file.id}`}
-                  className="text-emerald-700 font-bold hover:underline"
-                >
-                  Mở để chỉnh sửa & tính toán &rarr;
-                </a>
-              </div>
-            </div>
-          )}
-
-          {/* 4. Code / SQL / Archive Preview */}
-          {(file.category === 'code' || file.category === 'archive') && (
-            <div className="bg-zinc-900 text-zinc-100 rounded-xl shadow-xl border border-zinc-800 p-5 w-full max-w-2xl font-mono text-xs overflow-x-auto">
-              <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-800 text-[11px] text-zinc-400">
-                <span className="flex items-center gap-1.5">
-                  <Code className="w-3.5 h-3.5 text-purple-400" />
-                  <span>{file.name} (Source Syntax)</span>
-                </span>
-                <span>UTF-8</span>
-              </div>
-              <pre className="text-emerald-400 leading-relaxed overflow-x-auto">
-                {file.previewContent?.textSample ||
-                  `-- Database Schema Migration v2
-CREATE TABLE IF NOT EXISTS document_snapshots (
-  id VARCHAR(64) PRIMARY KEY,
-  document_id VARCHAR(64) NOT NULL,
-  version INT NOT NULL,
-  byte_size INT NOT NULL,
-  s3_key VARCHAR(255) NOT NULL,
-  mutation_count INT DEFAULT 0,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_snapshots_doc ON document_snapshots(document_id, version DESC);`}
+              <pre className="font-mono text-xs text-zinc-800 whitespace-pre-wrap leading-relaxed overflow-x-auto bg-zinc-50 p-4 rounded-lg border border-zinc-100">
+                {previewData.content || '(Tệp trống)'}
               </pre>
             </div>
           )}
 
-          {/* 5. Snapshot CRDT Preview */}
-          {file.category === 'snapshot' && (
-            <div className="bg-white rounded-xl shadow-lg border border-zinc-200 p-6 w-full max-w-lg">
-              <div className="flex items-center gap-3 pb-4 mb-4 border-b border-zinc-100">
-                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
-                  <Layers className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-bold text-zinc-900">{file.name}</h4>
-                  <p className="text-xs text-zinc-500 font-mono">Bản chụp nhị phân Yjs State Vector</p>
-                </div>
+          {/* 2. Real CSV spreadsheet preview */}
+          {!loading && !error && previewType === 'csv' && (
+            <div className="bg-white rounded-xl shadow-lg border border-zinc-200 p-6 w-full max-w-4xl overflow-auto max-h-[70vh]">
+              <div className="flex items-center justify-between pb-3 mb-3 border-b border-zinc-100">
+                <span className="text-xs font-bold text-zinc-900">{file.name}</span>
+                <span className="text-[11px] text-zinc-500 font-mono">Bảng tính CSV</span>
               </div>
+              {Array.isArray(previewData.rows) && previewData.rows.length > 0 ? (
+                <div className="overflow-x-auto border border-zinc-200 rounded-lg">
+                  <table className="w-full text-left text-xs divide-y divide-zinc-200">
+                    <thead className="bg-zinc-50 text-zinc-700 font-bold">
+                      <tr>
+                        {previewData.rows[0].map((h: string, idx: number) => (
+                          <th key={idx} className="p-2 border-r border-zinc-200 last:border-r-0">
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-100 font-mono text-[11px]">
+                      {previewData.rows.slice(1).map((row: string[], rIdx: number) => (
+                        <tr key={rIdx} className="hover:bg-zinc-50">
+                          {row.map((cell: string, cIdx: number) => (
+                            <td key={cIdx} className="p-2 border-r border-zinc-100 last:border-r-0 text-zinc-700">
+                              {cell}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500">Tệp CSV trống hoặc không có dữ liệu bảng.</p>
+              )}
+            </div>
+          )}
 
-              <div className="space-y-3 text-xs">
-                <div className="flex justify-between p-2.5 bg-zinc-50 rounded-lg">
-                  <span className="text-zinc-500 font-medium">Dung lượng nhị phân:</span>
-                  <span className="font-mono font-bold text-zinc-900">{formatSize(file.size)}</span>
-                </div>
-                <div className="flex justify-between p-2.5 bg-zinc-50 rounded-lg">
-                  <span className="text-zinc-500 font-medium">Định dạng nén:</span>
-                  <span className="font-mono text-blue-600 font-bold">lib0/encoding v2</span>
-                </div>
-                <div className="flex justify-between p-2.5 bg-zinc-50 rounded-lg">
-                  <span className="text-zinc-500 font-medium">Khả năng khôi phục:</span>
-                  <span className="text-emerald-700 font-bold flex items-center gap-1">
-                    <ShieldCheck className="w-3.5 h-3.5" /> Toàn vẹn 100%
-                  </span>
-                </div>
+          {/* 3. Real Image preview */}
+          {!loading && !error && previewType === 'image' && (
+            <div
+              className="flex items-center justify-center transition-transform duration-200"
+              style={{ transform: `scale(${zoomLevel / 100})` }}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={`${apiUrl}/files/${file.id}/download`}
+                alt={file.name}
+                className="max-h-[65vh] max-w-full object-contain rounded-xl shadow-xl border border-zinc-200"
+              />
+            </div>
+          )}
+
+          {/* 4. Real PDF preview */}
+          {!loading && !error && previewType === 'pdf' && (
+            <iframe
+              src={`${apiUrl}/files/${file.id}/download`}
+              title={file.name}
+              className="w-full h-[68vh] rounded-xl border border-zinc-200 shadow-md bg-white"
+            />
+          )}
+
+          {/* 5. Unsupported binary or other formats */}
+          {!loading && !error && previewType === 'unsupported' && (
+            <div className="bg-white rounded-2xl p-8 border border-zinc-200 shadow-lg max-w-md text-center flex flex-col items-center gap-3">
+              <div className="w-14 h-14 rounded-2xl bg-zinc-100 flex items-center justify-center text-zinc-600 mb-1">
+                {fileCategory === 'spreadsheet' ? (
+                  <TableIcon className="w-7 h-7 text-emerald-600" />
+                ) : fileCategory === 'snapshot' ? (
+                  <Layers className="w-7 h-7 text-blue-600" />
+                ) : (
+                  <FileText className="w-7 h-7 text-indigo-600" />
+                )}
               </div>
+              <h4 className="text-sm font-bold text-zinc-900">{file.name}</h4>
+              <p className="text-xs text-zinc-500 leading-relaxed">
+                {previewData.message || 'Không hỗ trợ xem trước trực tiếp định dạng tệp này.'}
+              </p>
+              <button
+                onClick={() => onDownload(file)}
+                className="mt-2 inline-flex items-center gap-2 px-4 py-2 bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-bold rounded-xl shadow-xs transition-all"
+              >
+                <Download className="w-4 h-4" />
+                <span>Tải về máy tính ({formatSize(file.size)})</span>
+              </button>
             </div>
           )}
         </div>
-
-        {/* Footer Navigation for multipage documents */}
-        {file.category === 'document' && (
-          <div className="h-12 px-6 border-t border-zinc-200 bg-white flex items-center justify-between text-xs text-zinc-600 shrink-0">
-            <div className="flex items-center gap-2">
-              <button
-                disabled={currentPage <= 1}
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                className="p-1 rounded-lg border border-zinc-200 hover:bg-zinc-100 disabled:opacity-30"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <span className="font-mono">
-                Trang {currentPage} / {totalPages}
-              </span>
-              <button
-                disabled={currentPage >= totalPages}
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                className="p-1 rounded-lg border border-zinc-200 hover:bg-zinc-100 disabled:opacity-30"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => window.print()}
-                className="flex items-center gap-1 px-3 py-1 rounded-lg text-zinc-600 hover:bg-zinc-100 text-xs font-semibold"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                <span>In tài liệu</span>
-              </button>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
 }
+
+export default FilePreviewModal;

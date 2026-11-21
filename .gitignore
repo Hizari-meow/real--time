@@ -10,3 +10,9 @@ build/
 coverage/
 prisma/*.db
 prisma/*.db-journal
+*.tsbuildinfo
+
+# Ignore markdown files and documentation
+*.md
+docs/
+
