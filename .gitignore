@@ -14,5 +14,6 @@ prisma/*.db-journal
 
 # Ignore markdown files and documentation
 *.md
+!README.md
 docs/
 
